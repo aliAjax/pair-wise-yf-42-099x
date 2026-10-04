@@ -39,18 +39,45 @@ def _validate_pairing(actor, entity, data, lookup):
     return {"approved_by": actor.user_id}
 
 
-CUSTOM_CREATE = {'animal': _validate_animal}
+def _validate_license(actor, data, lookup):
+    license_no = data.get("license_no")
+    if license_no is None or str(license_no).strip() == "":
+        raise ValidationError("license_no is required")
+    data["license_no"] = str(license_no).strip()
+    species = data.get("species")
+    if species is None or str(species).strip() == "":
+        raise ValidationError("species is required")
+    data["species"] = str(species).strip()
+    try:
+        year = int(data.get("year"))
+    except (TypeError, ValueError):
+        raise ValidationError("year must be an integer")
+    data["year"] = year
+    try:
+        quota = int(data.get("quota"))
+    except (TypeError, ValueError):
+        raise ValidationError("quota must be an integer")
+    if quota < 0:
+        raise ValidationError("quota must be non-negative")
+    data["quota"] = quota
+    if lookup is not None:
+        existing = lookup("license", "license_no", data["license_no"])
+        if existing:
+            raise ConflictError("license_no already exists: " + data["license_no"])
+
+
+CUSTOM_CREATE = {'animal': _validate_animal, 'license': _validate_license}
 CUSTOM_TRANSITIONS = {('pairing', 'approve'): _validate_pairing}
 
 
 class RuleEngine:
-    ALIASES = {'animals': 'animal', 'pairings': 'pairing', 'transfers': 'transfer'}
-    INITIAL_STATUS = {'animal': 'active', 'pairing': 'proposed', 'transfer': 'planned'}
-    TRANSITIONS = {'animal': {'mark_deceased': (('active',), 'deceased'), 'quarantine_animal': (('active',), 'quarantined'), 'release_quarantine': (('quarantined',), 'active')}, 'pairing': {'approve': (('proposed',), 'approved'), 'reject': (('proposed',), 'rejected'), 'complete': (('approved',), 'completed')}, 'transfer': {'authorize': (('planned',), 'authorized'), 'ship': (('authorized',), 'in_transit'), 'arrive': (('in_transit',), 'completed')}}
-    CREATE_REQUIRED = {'animal': ('name', 'sex'), 'pairing': ('proposed_by',), 'transfer': ('animal_id', 'from_institution', 'to_institution')}
-    ACTION_REQUIRED = {('animal', 'mark_deceased'): ('cause',), ('animal', 'quarantine_animal'): ('reason',), ('pairing', 'approve'): ('sire_id', 'dam_id', 'approvals'), ('pairing', 'reject'): ('reason',), ('pairing', 'complete'): ('offspring_ids',), ('transfer', 'authorize'): ('permit_id',), ('transfer', 'ship'): ('transport_id',), ('transfer', 'arrive'): ('arrival_date',)}
-    CREATE_ROLES = {'animal': ('admin', 'registrar'), 'pairing': ('admin', 'coordinator'), 'transfer': ('admin', 'registrar')}
-    ROLE_ACTIONS = {'mark_deceased': ('admin', 'veterinarian'), 'quarantine_animal': ('admin', 'veterinarian'), 'release_quarantine': ('admin', 'veterinarian'), 'approve': ('admin', 'coordinator'), 'reject': ('admin', 'coordinator'), 'complete': ('admin', 'coordinator'), 'authorize': ('admin', 'registrar'), 'ship': ('admin', 'registrar'), 'arrive': ('admin', 'registrar')}
+    ALIASES = {'animals': 'animal', 'pairings': 'pairing', 'transfers': 'transfer', 'licenses': 'license', 'pending_items': 'pending_item'}
+    INITIAL_STATUS = {'animal': 'active', 'pairing': 'proposed', 'transfer': 'planned', 'license': 'active', 'pending_item': 'pending'}
+    TRANSITIONS = {'animal': {'mark_deceased': (('active',), 'deceased'), 'quarantine_animal': (('active',), 'quarantined'), 'release_quarantine': (('quarantined',), 'active')}, 'pairing': {'approve': (('proposed',), 'approved'), 'reject': (('proposed', 'queued', 'approved'), 'rejected'), 'complete': (('approved',), 'completed')}, 'transfer': {'authorize': (('planned',), 'authorized'), 'ship': (('authorized',), 'in_transit'), 'arrive': (('in_transit',), 'completed')}, 'license': {'expire': (('active',), 'expired'), 'withdraw': (('active',), 'withdrawn'), 'adjust': (('active',), 'active')}, 'pending_item': {'resolve': (('pending', 'failed'), 'resolved'), 'dismiss': (('pending', 'failed'), 'resolved')}}
+    CREATE_REQUIRED = {'animal': ('name', 'sex'), 'pairing': ('proposed_by',), 'transfer': ('animal_id', 'from_institution', 'to_institution'), 'license': ('license_no', 'species', 'year', 'quota'), 'pending_item': ('license_no',)}
+    ACTION_REQUIRED = {('animal', 'mark_deceased'): ('cause',), ('animal', 'quarantine_animal'): ('reason',), ('pairing', 'approve'): ('sire_id', 'dam_id', 'approvals'), ('pairing', 'reject'): ('reason',), ('pairing', 'complete'): ('offspring_ids',), ('transfer', 'authorize'): ('permit_id',), ('transfer', 'ship'): ('transport_id',), ('transfer', 'arrive'): ('arrival_date',), ('license', 'adjust'): ('quota',)}
+    CREATE_ROLES = {'animal': ('admin', 'registrar'), 'pairing': ('admin', 'coordinator'), 'transfer': ('admin', 'registrar'), 'license': ('admin', 'registrar'), 'pending_item': ('admin', 'registrar')}
+    ROLE_ACTIONS = {'mark_deceased': ('admin', 'veterinarian'), 'quarantine_animal': ('admin', 'veterinarian'), 'release_quarantine': ('admin', 'veterinarian'), 'approve': ('admin', 'coordinator'), 'reject': ('admin', 'coordinator'), 'complete': ('admin', 'coordinator'), 'authorize': ('admin', 'registrar'), 'ship': ('admin', 'registrar'), 'arrive': ('admin', 'registrar'), 'expire': ('admin', 'registrar'), 'withdraw': ('admin', 'registrar'), 'adjust': ('admin', 'registrar'), 'resolve': ('admin', 'registrar'), 'dismiss': ('admin', 'registrar')}
 
     def normalize_kind(self, kind):
         return self.ALIASES.get(kind, kind)

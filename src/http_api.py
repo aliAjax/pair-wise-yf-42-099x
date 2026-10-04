@@ -87,6 +87,8 @@ def create_handler(service, rules, static_dir):
                     return self._send(200, {"items": service.audit_log()})
                 if len(parts) == 3 and parts[:2] == ["api", "entities"]:
                     return self._send(200, service.get(parts[2]))
+                if len(parts) == 3 and parts[:2] == ["api", "licenses"]:
+                    return self._send(200, service.license_usage(parts[2]))
                 if len(parts) >= 2 and parts[0] == "api":
                     if parts[1] == "entities":
                         raise NotFoundError("not found")
@@ -107,6 +109,12 @@ def create_handler(service, rules, static_dir):
                 parsed = urlparse(self.path)
                 parts = [part for part in parsed.path.split("/") if part]
                 actor = self._actor()
+                if parts == ["api", "reconcile"]:
+                    body = self._body()
+                    items = body.get("licenses", body.get("items", []))
+                    return self._send(200, service.reconcile(actor, items))
+                if parts == ["api", "reconcile", "retry"]:
+                    return self._send(200, service.retry_unfinished(actor))
                 if len(parts) == 3 and parts[:2] == ["api", "entities"]:
                     body = self._body()
                     action = body.pop("action", None)
