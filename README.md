@@ -26,6 +26,52 @@ python3 app.py --db ./data.db --port 8308
 
 - `animal`：个体谱系；`pairing`：配对建议；`transfer`：机构和运输记录。
 
+## 可恢复的繁育配额账
+
+在通用实体之外，`src/quota.py` + `src/rules.py` 实现了一套可恢复的繁育名额账：
+
+- **许可证（permits）**：一条许可证对应一个物种和一个年度，带名额、有效期与版本号。
+  同一物种同一年度只允许一张有效许可证；非名额信息可 `amend`，**旧批准仍可继续执行**。
+- **配对占用（pairing 实体）**：`proposed → approved/queued → executed`，
+  失效为 `voided`（带中文失效原因）。批准在单条 `BEGIN IMMEDIATE` 事务内
+  “读现占用—决策—落账”，两人同时提交时只有一笔占名额，后来者拿到剩余名额或排队，
+  排队按提交先后、不插队。
+- **重算排队**：许可证下调名额时，超出容量的未执行批准自动失效
+  （`void_reason=quota_reduced`），排队项在有名额时递补；到期/撤回时所有未执行的
+  批准和排队项全部失效（`permit_expired` / `permit_withdrawn`），
+  **已完成（executed）结果永久保留**。完成的配对永久占用该年度名额，不释放名额。
+- **运输放行（release 实体）**：与配对批准分开记录，只允许对已完成配对开具，
+  保存许可证编号与版本快照；之后许可证变更/撤回不影响已完成放行。
+- **配额流水（quota_entries）**：`reserve / enqueue / promote / requeue /
+  execute / void` 全部带记账后余额，账可逐条重放核对。
+- **外部登记对账（registry_jobs / registry_receipts）**：回执按 `receipt_no` 去重，
+  重复回传只登记关联、不重处理；晚到回执与现占用冲突（许可证不存在、状态不一致、
+  占用数超名额）时保留为 `pending` 待处理项；`retry` 只续做 pending 项，
+  人工可 `accept`（以本地账为准）或 `exempt`（登记豁免/差错）。所有状态落 SQLite，
+  服务重启时 `recover_on_startup()` 自动续核未完成项。
+
+### 配额账接口
+
+身份仍通过 `X-User-Id` / `X-Role` 传入（admin / registrar / coordinator / registry）。
+
+- `POST /api/permits`：发证；`GET /api/permits`：列表。
+- `GET /api/permits/<no>/ledger`：许可证台账（占用、排队、完成、失效、配对、流水）。
+- `POST /api/permits/<no>/amend`：变更非名额信息；
+  `POST /api/permits/<no>/adjust-quota`：调整名额并重算排队（`{"quota":n}`）；
+  `POST /api/permits/<no>/expire` / `withdraw`：到期 / 撤回。
+- `POST /api/pairings`：提交建议（`permit_no`、`species`）；
+  `POST /api/pairings/<id>/approve`：批准（`sire_id`、`dam_id`，并发安全）；
+  `POST /api/pairings/<id>/execute`：完成（结果保留）；
+  `POST /api/pairings/<id>/reject`：取消未执行项（释放名额并重算）；
+  `GET /api/pairings?permit_no=&status=`：查询，`voided` 项含失效原因。
+- `POST /api/releases`：运输放行（`pairing_id`、`from_institution`、`to_institution`）。
+- `POST /api/registry-jobs`：新建对账批次；
+  `POST /api/registry-jobs/<no>/receipts`：回传一批回执（`{"receipts":[...]}`）；
+  `POST /api/registry-jobs/<no>/retry`：只续做未完成项；
+  `GET /api/registry-jobs/<no>`：批次与全部回执/重复关联；
+  `GET /api/pending-receipts`：全部待处理项；
+  `POST /api/receipts/<no>/resolve`：`{"resolution":"accept|exempt","note":...}`。
+
 ## 主要接口
 
 - `GET /health`：健康检查。

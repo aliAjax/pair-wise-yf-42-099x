@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from src.http_api import create_server
+from src.quota import QuotaService
 from src.repository import SQLiteRepository
 from src.rules import RuleEngine
 from src.service import DomainService
@@ -19,8 +20,14 @@ def main(argv=None):
     repository = SQLiteRepository(args.db)
     rules = RuleEngine()
     service = DomainService(repository, rules)
+    quota = QuotaService(repository, service.audit)
+    recovered = quota.recover_on_startup()
+    if recovered:
+        print("恢复未完成对账任务: " + ", ".join(recovered), flush=True)
     static_dir = Path(__file__).resolve().parent / "static"
-    server = create_server(args.host, args.port, service, rules, str(static_dir))
+    server = create_server(
+        args.host, args.port, service, rules, str(static_dir), quota=quota
+    )
 
     def stop(signum, frame):
         raise KeyboardInterrupt
